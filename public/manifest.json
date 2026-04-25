@@ -1,0 +1,16 @@
+{
+  "name": "LanLink",
+  "short_name": "LanLink",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "description": "Zero-cost LAN file transfer and temporary group chat.",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

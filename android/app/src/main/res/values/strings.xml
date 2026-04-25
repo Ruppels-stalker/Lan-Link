@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LanLink</string>
+    <string name="title_activity_main">LanLink</string>
+    <string name="package_name">com.lanlink.app</string>
+    <string name="custom_url_scheme">com.lanlink.app</string>
+</resources>

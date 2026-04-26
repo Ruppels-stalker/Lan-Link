@@ -75,10 +75,24 @@ export function useWebRTC(userName: string, roomName: string) {
 
     const setupUdp = async () => {
       try {
+        try {
+          await UdpSocket.closeAllSockets();
+          addLog("Cleaned up existing sockets.");
+        } catch (e) {}
+
         const { socketId } = await UdpSocket.create();
         socketIdRef.current = socketId;
         
-        await UdpSocket.bind({ socketId, port: UDP_PORT });
+        let currentPort = UDP_PORT;
+        try {
+          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
+        } catch (bindErr) {
+          addLog(`Port ${currentPort} bind failed, trying random fallback...`);
+          currentPort = Math.floor(Math.random() * (5000 - 4000 + 1)) + 4000;
+          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
+          addLog(`Successfully bound to fallback port ${currentPort}`);
+        }
+        
         await UdpSocket.setBroadcast({ socketId, enabled: true });
         
         // Dynamically find local subnet broadcast
@@ -199,7 +213,13 @@ export function useWebRTC(userName: string, roomName: string) {
         heartbeatInterval = setInterval(broadcastDiscover, 5000); // 5 seconds per request
 
       } catch (err: any) {
-        addLog(`UDP Setup Error: ${err.message}`);
+        let errDetails = "Unknown Error";
+        try {
+          errDetails = JSON.stringify(err);
+        } catch (e) {
+          errDetails = String(err);
+        }
+        addLog(`UDP Setup Error: ${err.message || ''} | ${errDetails}`);
         console.error("Failed to setup UDP", err);
       }
     };

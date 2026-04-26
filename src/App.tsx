@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, FileUp, Users, Wifi, HardDrive, Download, Zap, Lock, Globe } from 'lucide-react';
+import { Send, FileUp, Users, Wifi, HardDrive, Download, Zap, Lock, Globe, WifiOff, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useWebRTC } from './hooks/useWebRTC';
 import { generateFunnyName } from './utils/nameGenerator';
@@ -112,7 +112,7 @@ export default function App() {
 }
 
 function Room({ userName, roomName }: { userName: string; roomName: string }) {
-  const { peers, messages, transfers, sendChatMessage, sendFile } = useWebRTC(userName, roomName);
+  const { peers, messages, transfers, sendChatMessage, sendFile, isConnected } = useWebRTC(userName, roomName);
   const [msgInput, setMsgInput] = useState('');
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -153,23 +153,35 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
           <Users size={18} />
           <h3>Active Peers ({peers.length})</h3>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-2">
+        <div className="flex-1 overflow-y-auto space-y-2 p-1">
+          {!isConnected && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-sm mb-4">
+              <WifiOff size={18} className="shrink-0" />
+              <span className="font-medium">No Wi-Fi/Hotspot Connection</span>
+            </motion.div>
+          )}
           <AnimatePresence>
             <motion.div
               onClick={() => setSelectedPeerId(null)}
-              className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${!selectedPeerId ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-800'}`}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${!selectedPeerId ? 'bg-indigo-500/20 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.1)]' : 'bg-slate-800/30 border-slate-700/30 hover:bg-slate-800/60 hover:border-slate-600/50 shadow-sm'}`}
             >
-              <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs">
-                <Globe size={16} className="text-slate-300" />
+              <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs shadow-inner">
+                <Globe size={18} className="text-slate-300" />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">Everyone</p>
               </div>
             </motion.div>
             
-            {peers.length === 0 && (
-              <motion.div initial={{opacity:0}} animate={{opacity:1}} className="text-sm text-slate-500 italic mt-2">
-                Waiting for others to join...
+            {peers.length === 0 && isConnected && (
+              <motion.div initial={{opacity:0}} animate={{opacity:1}} className="flex items-center gap-3 p-4 rounded-xl border border-slate-800/50 bg-slate-900/20 mt-4">
+                <div className="relative flex items-center justify-center w-8 h-8">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-20 animate-ping"></span>
+                  <Loader2 size={18} className="text-indigo-400 animate-spin" />
+                </div>
+                <span className="text-sm text-slate-400 font-medium tracking-wide">Scanning for peers...</span>
               </motion.div>
             )}
             {peers.map(peer => (
@@ -178,10 +190,12 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={() => setSelectedPeerId(peer.id)}
-                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedPeerId === peer.id ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-800'}`}
+                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${selectedPeerId === peer.id ? 'bg-indigo-500/20 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.1)]' : 'bg-slate-800/30 border-slate-700/30 hover:bg-slate-800/60 hover:border-slate-600/50 shadow-sm'}`}
               >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-xs">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-sm shadow-md border border-indigo-400/30 text-white">
                   {peer.name.charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -219,10 +233,18 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
                           <div className={`p-2 rounded-lg ${t.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
                             {t.status === 'completed' ? <Download size={20} /> : <FileUp size={20} />}
                           </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate" title={t.name}>{t.name}</p>
-                            <p className="text-xs text-slate-400">
-                              {formatBytes(t.receivedBytes)} / {formatBytes(t.size)}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate text-slate-200" title={t.name}>{t.name}</p>
+                            <p className="text-xs text-slate-400 flex items-center flex-wrap gap-1.5 mt-1">
+                              <span>{formatBytes(t.receivedBytes)} / {formatBytes(t.size)}</span>
+                              {t.speed && t.status === 'transferring' && (
+                                <>
+                                  <span className="w-1 h-1 rounded-full bg-slate-700"></span>
+                                  <span className="text-indigo-400 font-medium">{formatBytes(t.speed)}/s</span>
+                                </>
+                              )}
+                              <span className="w-1 h-1 rounded-full bg-slate-700"></span>
+                              <span className="font-medium text-slate-300">{Math.round(progress)}%</span>
                             </p>
                           </div>
                         </div>

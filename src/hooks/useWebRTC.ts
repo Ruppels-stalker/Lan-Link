@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { UdpSocket } from 'capacitor-udp-socket';
 import { Capacitor } from '@capacitor/core';
+import { Network } from '@capacitor/network';
 import { saveChunk, getFileChunks, clearFileChunks } from '../utils/db';
 
 const CHUNK_SIZE = 64 * 1024; // 64KB
@@ -29,6 +30,7 @@ export interface FileTransfer {
   type: string;
   receivedBytes: number;
   status: 'pending' | 'transferring' | 'completed' | 'failed';
+  speed?: number; // bytes per second
 }
 
 export function useWebRTC(userName: string, roomName: string) {
@@ -38,6 +40,8 @@ export function useWebRTC(userName: string, roomName: string) {
   
   const myIdRef = useRef<string>(Math.random().toString(36).substring(2, 9));
   const socketIdRef = useRef<number | null>(null);
+  const broadcastAddrsRef = useRef<string[]>(['255.255.255.255', '192.168.43.255']);
+  const [isConnected, setIsConnected] = useState<boolean>(true);
   
   const peersRef = useRef<Map<string, Peer>>(new Map());
   const connectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -45,10 +49,14 @@ export function useWebRTC(userName: string, roomName: string) {
   const iceQueues = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   
   const receivingFileRef = useRef<Record<string, {
-    metadata: any;
+    metadata: { type: string, fileId: string, name: string, size: number, fileType: string };
     receivedBytes: number;
     chunkIndex: number;
+    lastTime: number;
+    lastBytes: number;
   }>>({});
+  
+  const sendingFileRef = useRef<Record<string, { lastTime: number, lastBytes: number }>>({});
 
   useEffect(() => {
     if (!userName || !roomName) return;
@@ -68,6 +76,20 @@ export function useWebRTC(userName: string, roomName: string) {
         await UdpSocket.bind({ socketId, port: UDP_PORT });
         await UdpSocket.setBroadcast({ socketId, enabled: true });
         
+        // Dynamically find local subnet broadcast
+        try {
+          const info = await UdpSocket.getInfo({ socketId });
+          if (info.localAddress && info.localAddress !== '0.0.0.0' && info.localAddress !== '127.0.0.1') {
+            const parts = info.localAddress.split('.');
+            if (parts.length === 4) {
+              const dynamicBcast = `${parts[0]}.${parts[1]}.${parts[2]}.255`;
+              broadcastAddrsRef.current = [...new Set([dynamicBcast, '255.255.255.255', '192.168.43.255', '192.168.49.255', '192.168.4.255'])];
+            }
+          }
+        } catch (e) {
+           console.error("Could not get socket info", e);
+        }
+
         // Listen for UDP packets
         UdpSocket.addListener('receive', async (event) => {
           if (event.socketId !== socketIdRef.current || !event.buffer) return;
@@ -149,12 +171,14 @@ export function useWebRTC(userName: string, roomName: string) {
           // capacitor-udp-socket expects string buffer. Send as base64.
           const b64Msg = btoa(unescape(encodeURIComponent(msg)));
           try {
-            await UdpSocket.send({
-              socketId: socketIdRef.current,
-              address: '255.255.255.255',
-              port: UDP_PORT,
-              buffer: b64Msg
-            });
+            for (const addr of broadcastAddrsRef.current) {
+              UdpSocket.send({
+                socketId: socketIdRef.current,
+                address: addr,
+                port: UDP_PORT,
+                buffer: b64Msg
+              }).catch(() => {}); // Ignore individual address failures
+            }
           } catch (e) {
             console.error("Broadcast failed", e);
           }
@@ -170,7 +194,14 @@ export function useWebRTC(userName: string, roomName: string) {
 
     setupUdp();
 
+    // Check Network status
+    Network.getStatus().then(status => setIsConnected(status.connected));
+    const netListener = Network.addListener('networkStatusChange', status => {
+      setIsConnected(status.connected);
+    });
+
     return () => {
+      netListener.then(l => l.remove());
       clearInterval(heartbeatInterval);
       if (socketIdRef.current !== null) {
         UdpSocket.close({ socketId: socketIdRef.current });
@@ -197,12 +228,14 @@ export function useWebRTC(userName: string, roomName: string) {
     });
     const b64Msg = btoa(unescape(encodeURIComponent(msg)));
     try {
-      await UdpSocket.send({
-        socketId: socketIdRef.current,
-        address: '255.255.255.255',
-        port: UDP_PORT,
-        buffer: b64Msg
-      });
+      for (const addr of broadcastAddrsRef.current) {
+        UdpSocket.send({
+          socketId: socketIdRef.current,
+          address: addr,
+          port: UDP_PORT,
+          buffer: b64Msg
+        }).catch(() => {});
+      }
     } catch (e) {
       console.error("Signal broadcast failed", e);
     }
@@ -284,7 +317,9 @@ export function useWebRTC(userName: string, roomName: string) {
           receivingFileRef.current[transferId] = {
             metadata: msg,
             receivedBytes: 0,
-            chunkIndex: 0
+            chunkIndex: 0,
+            lastTime: Date.now(),
+            lastBytes: 0
           };
           
           channel.send(JSON.stringify({ type: 'file-accept', fileId: transferId }));
@@ -301,10 +336,22 @@ export function useWebRTC(userName: string, roomName: string) {
           fileState.chunkIndex++;
           fileState.receivedBytes += chunkData.byteLength;
           
-          setTransfers(prev => ({
-            ...prev,
-            [fileId]: { ...prev[fileId], receivedBytes: fileState.receivedBytes, status: 'transferring' }
-          }));
+          const now = Date.now();
+          let currentSpeed = 0;
+          if (now - fileState.lastTime >= 500) {
+            currentSpeed = ((fileState.receivedBytes - fileState.lastBytes) / (now - fileState.lastTime)) * 1000;
+            fileState.lastTime = now;
+            fileState.lastBytes = fileState.receivedBytes;
+          }
+          
+          setTransfers(prev => {
+            const update = { ...prev };
+            if (update[fileId]) {
+              update[fileId] = { ...update[fileId], receivedBytes: fileState.receivedBytes, status: 'transferring' };
+              if (currentSpeed > 0) update[fileId].speed = currentSpeed;
+            }
+            return update;
+          });
 
           if (fileState.receivedBytes >= fileState.metadata.size) {
             setTransfers(prev => ({
@@ -400,9 +447,12 @@ export function useWebRTC(userName: string, roomName: string) {
         size: file.size,
         type: file.type,
         receivedBytes: 0,
-        status: 'transferring'
+        status: 'transferring',
+        speed: 0
       }
     }));
+    
+    sendingFileRef.current[paddedFileId] = { lastTime: Date.now(), lastBytes: 0 };
 
     const reader = new FileReader();
     let offset = 0;
@@ -435,10 +485,23 @@ export function useWebRTC(userName: string, roomName: string) {
       
       offset += buffer.byteLength;
       
-      setTransfers(prev => ({
-        ...prev,
-        [paddedFileId]: { ...prev[paddedFileId], receivedBytes: offset }
-      }));
+      const now = Date.now();
+      const state = sendingFileRef.current[paddedFileId];
+      let currentSpeed = 0;
+      if (state && now - state.lastTime >= 500) {
+        currentSpeed = ((offset - state.lastBytes) / (now - state.lastTime)) * 1000;
+        state.lastTime = now;
+        state.lastBytes = offset;
+      }
+      
+      setTransfers(prev => {
+        const update = { ...prev };
+        if (update[paddedFileId]) {
+          update[paddedFileId] = { ...update[paddedFileId], receivedBytes: offset };
+          if (currentSpeed > 0) update[paddedFileId].speed = currentSpeed;
+        }
+        return update;
+      });
 
       if (offset < file.size) {
         setTimeout(() => readSlice(offset), 0);
@@ -453,5 +516,5 @@ export function useWebRTC(userName: string, roomName: string) {
     readSlice(0);
   }, []);
 
-  return { peers, messages, transfers, sendChatMessage, sendFile };
+  return { peers, messages, transfers, sendChatMessage, sendFile, isConnected };
 }

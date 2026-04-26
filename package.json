@@ -12,6 +12,7 @@
   "dependencies": {
     "@capacitor/android": "^8.3.1",
     "@capacitor/core": "^8.3.1",
+    "@capacitor/network": "^8.0.1",
     "@tailwindcss/vite": "^4.2.4",
     "capacitor-udp-socket": "^7.0.0",
     "framer-motion": "^12.38.0",

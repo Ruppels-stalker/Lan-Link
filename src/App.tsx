@@ -5,6 +5,7 @@ import { useWebRTC } from './hooks/useWebRTC';
 import { generateFunnyName } from './utils/nameGenerator';
 import './App.css';
 
+// Native NSD + Multicast Lock stable build
 export default function App() {
   const [inRoom, setInRoom] = useState(false);
   const [userName, setUserName] = useState('');

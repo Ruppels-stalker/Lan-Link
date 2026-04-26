@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ZeroConf } from 'capacitor-zeroconf';
 import { Capacitor } from '@capacitor/core';
 import { Network } from '@capacitor/network';
 import { saveChunk, getFileChunks, clearFileChunks } from '../utils/db';
@@ -78,10 +77,9 @@ export function useWebRTC(userName: string, roomName: string) {
         addLog(`WARNING: Connection type is ${netStatus.connectionType}. discovery may fail without Wi-Fi.`);
       }
 
-      // Listen for HTTP signals from Java Server (Plan B Failsafe)
+      // Listen for HTTP signals from Java Server
       window.addEventListener('http-signal', ((event: any) => {
         try {
-          // If event.detail is a string, parse it. If it's already an object, use it directly.
           const payloadStr = typeof event.detail === 'string' ? JSON.parse(event.detail).payload : event.detail.payload;
           const data = JSON.parse(payloadStr);
           processSignal(data);
@@ -90,37 +88,31 @@ export function useWebRTC(userName: string, roomName: string) {
         }
       }) as any);
 
-      try {
-        // ZeroConf Discovery (Plan A)
-        await ZeroConf.register({
-          type: '_lanlink._tcp.',
-          name: `${userName} (${myIdRef.current})`,
-          domain: 'local.',
-          port: 3003,
-          props: {
-            id: myIdRef.current,
-            name: userName
-          }
-        });
-        addLog("Registered ZeroConf service: _lanlink._tcp.");
+      // Listen for Native NSD Registration
+      window.addEventListener('nsd-registered', ((event: any) => {
+        try {
+          const payloadStr = typeof event.detail === 'string' ? event.detail : JSON.stringify(event.detail);
+          const data = typeof payloadStr === 'string' ? JSON.parse(payloadStr) : payloadStr;
+          myIdRef.current = data.name;
+          addLog(`NSD Registered as: ${data.name}`);
+        } catch (e) {
+          console.error("Failed to parse nsd-registered", e);
+        }
+      }) as any);
 
-        await ZeroConf.watch({ 
-          type: '_lanlink._tcp.',
-          domain: 'local.'
-        });
-        addLog("Watching for peers via ZeroConf...");
-
-        ZeroConf.addListener('discover', (result: any) => {
-          const service = result.service;
-          if (!service) return;
-
-          const id = service.props?.id || service.name.match(/\((.*?)\)/)?.[1];
-          const name = service.props?.name || service.name.split(' (')[0];
-          const ip = service.ipv4Addresses?.[0] || service.host;
+      // Listen for Native NSD Peer Discovery
+      window.addEventListener('nsd-peer-resolved', ((event: any) => {
+        try {
+          const payloadStr = typeof event.detail === 'string' ? event.detail : JSON.stringify(event.detail);
+          const data = typeof payloadStr === 'string' ? JSON.parse(payloadStr) : payloadStr;
+          
+          const id = data.name;
+          const name = id; // use the NSD name as peer name for simplicity
+          const ip = data.ip;
 
           if (id && id !== myIdRef.current) {
             if (!peersRef.current.has(id)) {
-              addLog(`ZeroConf: Found peer ${name} at ${ip}`);
+              addLog(`NSD: Found peer ${name} at ${ip}:${data.port}`);
               peersRef.current.set(id, { id, name });
               peerIpsRef.current.set(id, ip);
               updatePeers();
@@ -130,10 +122,12 @@ export function useWebRTC(userName: string, roomName: string) {
               }
             }
           }
-        });
-      } catch (err: any) {
-        addLog(`ZeroConf Setup Error: ${err.message}. Falling back to Plan B (Manual IP).`);
-      }
+        } catch (e) {
+          console.error("Failed to parse nsd-peer-resolved", e);
+        }
+      }) as any);
+      
+      addLog("Native NSD Listeners activated.");
     };
 
     const processSignal = async (data: any) => {
@@ -183,7 +177,6 @@ export function useWebRTC(userName: string, roomName: string) {
 
     return () => {
       netListener.then(l => l.remove());
-      ZeroConf.stop();
       connectionsRef.current.forEach(pc => pc.close());
       connectionsRef.current.clear();
       channelsRef.current.clear();
@@ -210,20 +203,34 @@ export function useWebRTC(userName: string, roomName: string) {
       signal: signalData
     });
 
-    try {
-      const response = await fetch(`http://${peerIp}:3003/signal`, {
-        method: 'POST',
-        mode: 'cors',
-        cache: 'no-cache',
-        body: `postData=${encodeURIComponent(msg)}`,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+    const attemptFetch = async (retries = 3): Promise<void> => {
+      try {
+        const fetchUrl = `http://${peerIp}:3003/signal`;
+        console.log(`[Signal Verification] Fetching URL: ${fetchUrl}`);
+        console.log(`[Signal Verification] Headers: Content-Type: application/x-www-form-urlencoded`);
+        
+        const response = await fetch(fetchUrl, {
+          method: 'POST',
+          mode: 'cors',
+          cache: 'no-cache',
+          body: `postData=${encodeURIComponent(msg)}`,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (e: any) {
+        if (retries > 0) {
+          addLog(`Signaling Error to ${peerIp}: ${e.message}. Retrying in 3s...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          return attemptFetch(retries - 1);
+        } else {
+          addLog(`Signaling Error to ${peerIp}: ${e.message}. Max retries reached.`);
         }
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    } catch (e: any) {
-      addLog(`Signaling Error to ${peerIp}: ${e.message}`);
-    }
+      }
+    };
+
+    await attemptFetch();
   };
 
   const createPeerConnection = async (peerId: string, initiator: boolean) => {

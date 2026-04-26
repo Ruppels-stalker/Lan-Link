@@ -12,13 +12,21 @@ import fi.iki.elonen.NanoHTTPD;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Bridge;
 import android.util.Log;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
 
 public class MainActivity extends BridgeActivity {
     private WifiManager.MulticastLock multicastLock;
     private SignalingServer server;
+    private NsdManager nsdManager;
+    private NsdManager.RegistrationListener registrationListener;
+    private NsdManager.DiscoveryListener discoveryListener;
+    private String mServiceName = "LanLink-" + UUID.randomUUID().toString().substring(0, 8);
+    private final String SERVICE_TYPE = "_lanlink._tcp.";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -33,13 +41,9 @@ public class MainActivity extends BridgeActivity {
                 ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
             }
         }
-        
-        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        if (wifiManager != null) {
-            multicastLock = wifiManager.createMulticastLock("LanLinkMulticastLock");
-            multicastLock.setReferenceCounted(true);
-            multicastLock.acquire();
-        }
+
+        nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
+        initializeNsdListeners();
 
         server = new SignalingServer();
         try {
@@ -48,6 +52,113 @@ public class MainActivity extends BridgeActivity {
         } catch (IOException e) {
             Log.e("LanLinkNative", "Failed to start NanoHTTPD server", e);
         }
+    }
+
+    private void initializeNsdListeners() {
+        registrationListener = new NsdManager.RegistrationListener() {
+            @Override
+            public void onServiceRegistered(NsdServiceInfo NsdServiceInfo) {
+                mServiceName = NsdServiceInfo.getServiceName();
+                Log.d("LanLinkNative", "NSD Service registered: " + mServiceName);
+                try {
+                    JSObject data = new JSObject();
+                    data.put("name", mServiceName);
+                    getBridge().triggerWindowJSEvent("nsd-registered", data.toString());
+                } catch (Exception e) {}
+            }
+            @Override
+            public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {}
+            @Override
+            public void onServiceUnregistered(NsdServiceInfo arg0) {}
+            @Override
+            public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {}
+        };
+
+        discoveryListener = new NsdManager.DiscoveryListener() {
+            @Override
+            public void onDiscoveryStarted(String regType) {
+                Log.d("LanLinkNative", "NSD Discovery started");
+            }
+            @Override
+            public void onServiceFound(NsdServiceInfo service) {
+                Log.d("LanLinkNative", "NSD Service found: " + service);
+                if (!service.getServiceType().equals(SERVICE_TYPE)) {
+                    Log.d("LanLinkNative", "Unknown Service Type: " + service.getServiceType());
+                } else if (service.getServiceName().equals(mServiceName)) {
+                    Log.d("LanLinkNative", "Same machine: " + mServiceName);
+                } else {
+                    nsdManager.resolveService(service, new NsdManager.ResolveListener() {
+                        @Override
+                        public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                            Log.e("LanLinkNative", "NSD Resolve failed: " + errorCode);
+                        }
+                        @Override
+                        public void onServiceResolved(NsdServiceInfo serviceInfo) {
+                            Log.d("LanLinkNative", "NSD Resolve Succeeded. " + serviceInfo);
+                            if (serviceInfo.getHost() != null) {
+                                String hostAddress = serviceInfo.getHost().getHostAddress();
+                                int port = serviceInfo.getPort();
+                                String name = serviceInfo.getServiceName();
+
+                                JSObject data = new JSObject();
+                                data.put("name", name);
+                                data.put("ip", hostAddress);
+                                data.put("port", port);
+
+                                getBridge().triggerWindowJSEvent("nsd-peer-resolved", data.toString());
+                            }
+                        }
+                    });
+                }
+            }
+            @Override
+            public void onServiceLost(NsdServiceInfo service) {}
+            @Override
+            public void onDiscoveryStopped(String serviceType) {}
+            @Override
+            public void onStartDiscoveryFailed(String serviceType, int errorCode) {
+                nsdManager.stopServiceDiscovery(this);
+            }
+            @Override
+            public void onStopDiscoveryFailed(String serviceType, int errorCode) {
+                nsdManager.stopServiceDiscovery(this);
+            }
+        };
+    }
+
+    public void registerNsdService() {
+        NsdServiceInfo serviceInfo = new NsdServiceInfo();
+        serviceInfo.setServiceName(mServiceName);
+        serviceInfo.setServiceType(SERVICE_TYPE);
+        serviceInfo.setPort(3003);
+        nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifiManager != null) {
+            multicastLock = wifiManager.createMulticastLock("LanLinkMulticastLock");
+            multicastLock.setReferenceCounted(true);
+            multicastLock.acquire();
+        }
+        if (nsdManager != null) {
+            registerNsdService();
+            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        if (nsdManager != null) {
+            try { nsdManager.unregisterService(registrationListener); } catch (Exception e) {}
+            try { nsdManager.stopServiceDiscovery(discoveryListener); } catch (Exception e) {}
+        }
+        if (multicastLock != null && multicastLock.isHeld()) {
+            multicastLock.release();
+        }
+        super.onPause();
     }
 
     private class SignalingServer extends NanoHTTPD {
@@ -92,7 +203,7 @@ public class MainActivity extends BridgeActivity {
 
         private void addCorsHeaders(Response response) {
             response.addHeader("Access-Control-Allow-Origin", "*");
-            response.addHeader("Access-Control-Allow-Headers", "origin, accept, content-type");
+            response.addHeader("Access-Control-Allow-Headers", "*");
             response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         }
     }
@@ -100,9 +211,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (multicastLock != null && multicastLock.isHeld()) {
-            multicastLock.release();
-        }
         if (server != null) {
             server.stop();
         }

@@ -212,7 +212,8 @@ export function useWebRTC(userName: string, roomName: string) {
         const response = await fetch(fetchUrl, {
           method: 'POST',
           mode: 'cors',
-          cache: 'no-cache',
+          cache: 'no-store',
+          credentials: 'omit',
           body: `postData=${encodeURIComponent(msg)}`,
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded'

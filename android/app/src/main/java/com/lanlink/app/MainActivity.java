@@ -18,6 +18,10 @@ import com.getcapacitor.Bridge;
 import android.util.Log;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
+import java.net.NetworkInterface;
+import java.net.InetAddress;
+import java.util.Enumeration;
+import android.widget.Toast;
 
 public class MainActivity extends BridgeActivity {
     private WifiManager.MulticastLock multicastLock;
@@ -48,10 +52,33 @@ public class MainActivity extends BridgeActivity {
         server = new SignalingServer();
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
-            Log.d("LanLinkNative", "NanoHTTPD Signaling Server started on port 3003");
+            Log.d("LanLinkNative", "NanoHTTPD Signaling Server started on 0.0.0.0:3003");
+            logAndToastIps();
         } catch (IOException e) {
             Log.e("LanLinkNative", "Failed to start NanoHTTPD server", e);
         }
+    }
+
+    private void logAndToastIps() {
+        StringBuilder ips = new StringBuilder();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface iface = interfaces.nextElement();
+                Enumeration<InetAddress> addresses = iface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress addr = addresses.nextElement();
+                    if (!addr.isLoopbackAddress() && addr.getHostAddress().indexOf(':') < 0) { // IPv4 only
+                        ips.append(addr.getHostAddress()).append(" ");
+                        Log.d("LanLinkNative", "Bound to IP: " + addr.getHostAddress() + " on " + iface.getName());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e("LanLinkNative", "Failed to get IPs", e);
+        }
+        final String ipStr = ips.toString().trim();
+        runOnUiThread(() -> Toast.makeText(MainActivity.this, "Server bound to: " + ipStr, Toast.LENGTH_LONG).show());
     }
 
     private void initializeNsdListeners() {
@@ -163,7 +190,7 @@ public class MainActivity extends BridgeActivity {
 
     private class SignalingServer extends NanoHTTPD {
         public SignalingServer() {
-            super(3003);
+            super("0.0.0.0", 3003);
         }
 
         @Override
@@ -205,6 +232,7 @@ public class MainActivity extends BridgeActivity {
             response.addHeader("Access-Control-Allow-Origin", "*");
             response.addHeader("Access-Control-Allow-Headers", "*");
             response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            response.addHeader("Access-Control-Allow-Private-Network", "true");
         }
     }
 

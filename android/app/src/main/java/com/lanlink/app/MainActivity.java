@@ -57,7 +57,14 @@ public class MainActivity extends BridgeActivity {
 
         @Override
         public Response serve(IHTTPSession session) {
-            if (session.getMethod() == Method.POST && "/signal".equals(session.getUri())) {
+            Method method = session.getMethod();
+            if (Method.OPTIONS.equals(method)) {
+                Response response = newFixedLengthResponse(Response.Status.OK, "text/plain", "");
+                addCorsHeaders(response);
+                return response;
+            }
+
+            if (Method.POST.equals(method) && "/signal".equals(session.getUri())) {
                 try {
                     Map<String, String> files = new HashMap<>();
                     session.parseBody(files);
@@ -69,12 +76,24 @@ public class MainActivity extends BridgeActivity {
                     getBridge().triggerWindowJSEvent("http-signal", data.toString());
                     Log.d("LanLinkNative", "Received HTTP signal, triggering JS event");
                     
-                    return newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");
+                    Response response = newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");
+                    addCorsHeaders(response);
+                    return response;
                 } catch (Exception e) {
-                    return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.getMessage());
+                    Response response = newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.getMessage());
+                    addCorsHeaders(response);
+                    return response;
                 }
             }
-            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found");
+            Response response = newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found");
+            addCorsHeaders(response);
+            return response;
+        }
+
+        private void addCorsHeaders(Response response) {
+            response.addHeader("Access-Control-Allow-Origin", "*");
+            response.addHeader("Access-Control-Allow-Headers", "origin, accept, content-type");
+            response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         }
     }
 

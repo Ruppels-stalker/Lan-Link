@@ -213,6 +213,8 @@ export function useWebRTC(userName: string, roomName: string) {
     try {
       const response = await fetch(`http://${peerIp}:3003/signal`, {
         method: 'POST',
+        mode: 'cors',
+        cache: 'no-cache',
         body: `postData=${encodeURIComponent(msg)}`,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'

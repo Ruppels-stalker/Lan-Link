@@ -65,7 +65,7 @@ public class MainActivity extends BridgeActivity {
                     JSObject data = new JSObject();
                     data.put("payload", postData);
                     
-                    bridge.triggerWindowStageEvent("http-signal", data.toString());
+                    getBridge().triggerWindowJSEvent("http-signal", "window", data.toString());
                     Log.d("LanLinkNative", "Received HTTP signal, triggering JS event");
                     
                     return newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");

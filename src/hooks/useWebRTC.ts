@@ -70,16 +70,28 @@ export function useWebRTC(userName: string, roomName: string) {
     }
 
     const setupDiscovery = async () => {
-      try {
-        addLog(`Platform: ${Capacitor.getPlatform()}`);
-        addLog(`HTTP Server started on port 3003 (Java)`);
+      addLog(`Platform: ${Capacitor.getPlatform()}`);
+      addLog(`HTTP Server started on port 3003 (Java)`);
 
-        const netStatus = await Network.getStatus();
-        if (netStatus.connectionType === 'none' || netStatus.connectionType === 'cellular') {
-          addLog(`WARNING: Connection type is ${netStatus.connectionType}. discovery may fail without Wi-Fi.`);
+      const netStatus = await Network.getStatus();
+      if (netStatus.connectionType === 'none' || netStatus.connectionType === 'cellular') {
+        addLog(`WARNING: Connection type is ${netStatus.connectionType}. discovery may fail without Wi-Fi.`);
+      }
+
+      // Listen for HTTP signals from Java Server (Plan B Failsafe)
+      window.addEventListener('http-signal', ((event: any) => {
+        try {
+          // If event.detail is a string, parse it. If it's already an object, use it directly.
+          const payloadStr = typeof event.detail === 'string' ? JSON.parse(event.detail).payload : event.detail.payload;
+          const data = JSON.parse(payloadStr);
+          processSignal(data);
+        } catch (e) {
+          console.error("Failed to parse HTTP signal", e);
         }
+      }) as any);
 
-        // ZeroConf Discovery
+      try {
+        // ZeroConf Discovery (Plan A)
         await ZeroConf.register({
           type: '_lanlink._tcp.',
           name: `${userName} (${myIdRef.current})`,
@@ -119,19 +131,8 @@ export function useWebRTC(userName: string, roomName: string) {
             }
           }
         });
-
-        // Listen for HTTP signals from Java Server
-        window.addEventListener('http-signal', ((event: any) => {
-          try {
-            const data = JSON.parse(JSON.parse(event.detail).payload);
-            processSignal(data);
-          } catch (e) {
-            console.error("Failed to parse HTTP signal", e);
-          }
-        }) as any);
-
       } catch (err: any) {
-        addLog(`Discovery Setup Error: ${err.message}`);
+        addLog(`ZeroConf Setup Error: ${err.message}. Falling back to Plan B (Manual IP).`);
       }
     };
 

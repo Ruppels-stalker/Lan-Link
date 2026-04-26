@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.Bridge;
 import android.util.Log;
 
 public class MainActivity extends BridgeActivity {
@@ -65,7 +66,7 @@ public class MainActivity extends BridgeActivity {
                     JSObject data = new JSObject();
                     data.put("payload", postData);
                     
-                    getBridge().triggerWindowJSEvent("http-signal", "window", data.toString());
+                    getBridge().triggerWindowJSEvent("http-signal", data.toString());
                     Log.d("LanLinkNative", "Received HTTP signal, triggering JS event");
                     
                     return newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");

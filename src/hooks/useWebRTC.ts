@@ -37,6 +37,11 @@ export function useWebRTC(userName: string, roomName: string) {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transfers, setTransfers] = useState<Record<string, FileTransfer>>({});
+  const [logs, setLogs] = useState<{time: string, msg: string}[]>([]);
+  
+  const addLog = useCallback((msg: string) => {
+    setLogs(prev => [...prev.slice(-49), { time: new Date().toLocaleTimeString(), msg }]);
+  }, []);
   
   const myIdRef = useRef<string>(Math.random().toString(36).substring(2, 9));
   const socketIdRef = useRef<number | null>(null);
@@ -79,14 +84,17 @@ export function useWebRTC(userName: string, roomName: string) {
         // Dynamically find local subnet broadcast
         try {
           const info = await UdpSocket.getInfo({ socketId });
+          addLog(`Local IP Detection: ${info.localAddress || 'Unknown'}`);
           if (info.localAddress && info.localAddress !== '0.0.0.0' && info.localAddress !== '127.0.0.1') {
             const parts = info.localAddress.split('.');
             if (parts.length === 4) {
               const dynamicBcast = `${parts[0]}.${parts[1]}.${parts[2]}.255`;
               broadcastAddrsRef.current = [...new Set([dynamicBcast, '255.255.255.255', '192.168.43.255', '192.168.49.255', '192.168.4.255'])];
+              addLog(`Smart Broadcast Address: ${dynamicBcast}`);
             }
           }
-        } catch (e) {
+        } catch (e: any) {
+           addLog(`Error getting local IP: ${e.message}`);
            console.error("Could not get socket info", e);
         }
 
@@ -109,6 +117,7 @@ export function useWebRTC(userName: string, roomName: string) {
 
             if (data.type === 'discover') {
               if (!peersRef.current.has(fromId)) {
+                addLog(`Packet Received (Discover): Found peer ${data.name} at ${event.remoteAddress || 'Unknown'}`);
                 console.log('Discovered new peer:', data.name);
                 peersRef.current.set(fromId, { id: fromId, name: data.name });
                 updatePeers();
@@ -171,23 +180,26 @@ export function useWebRTC(userName: string, roomName: string) {
           // capacitor-udp-socket expects string buffer. Send as base64.
           const b64Msg = btoa(unescape(encodeURIComponent(msg)));
           try {
+            addLog(`Packet Sent (Discover) to: ${broadcastAddrsRef.current.join(', ')}`);
             for (const addr of broadcastAddrsRef.current) {
               UdpSocket.send({
                 socketId: socketIdRef.current,
                 address: addr,
                 port: UDP_PORT,
                 buffer: b64Msg
-              }).catch(() => {}); // Ignore individual address failures
+              }).catch((e) => { addLog(`UDP Send Error to ${addr}: ${e.message}`); }); 
             }
-          } catch (e) {
+          } catch (e: any) {
+            addLog(`UDP Broadcast Try/Catch Error: ${e.message}`);
             console.error("Broadcast failed", e);
           }
         };
 
         broadcastDiscover();
-        heartbeatInterval = setInterval(broadcastDiscover, 3000);
+        heartbeatInterval = setInterval(broadcastDiscover, 5000); // 5 seconds per request
 
-      } catch (err) {
+      } catch (err: any) {
+        addLog(`UDP Setup Error: ${err.message}`);
         console.error("Failed to setup UDP", err);
       }
     };
@@ -516,5 +528,5 @@ export function useWebRTC(userName: string, roomName: string) {
     readSlice(0);
   }, []);
 
-  return { peers, messages, transfers, sendChatMessage, sendFile, isConnected };
+  return { peers, messages, transfers, sendChatMessage, sendFile, isConnected, logs };
 }

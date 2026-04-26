@@ -112,15 +112,20 @@ export default function App() {
 }
 
 function Room({ userName, roomName }: { userName: string; roomName: string }) {
-  const { peers, messages, transfers, sendChatMessage, sendFile, isConnected } = useWebRTC(userName, roomName);
+  const { peers, messages, transfers, sendChatMessage, sendFile, isConnected, logs } = useWebRTC(userName, roomName);
   const [msgInput, setMsgInput] = useState('');
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const loggerEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, transfers]);
+
+  useEffect(() => {
+    loggerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
 
   const handleSendMsg = (e: React.FormEvent) => {
     e.preventDefault();
@@ -301,8 +306,8 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
           </div>
         </div>
 
-        {/* Input Area */}
-        <div className="p-4 bg-slate-900/50 border-t border-slate-800">
+        {/* Input Area & Debugger */}
+        <div className="p-4 bg-slate-900/50 border-t border-slate-800 flex flex-col gap-4">
           <form onSubmit={handleSendMsg} className="flex gap-2">
             <input
               type="file"
@@ -333,6 +338,21 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
               <Send size={20} className={msgInput.trim() ? "translate-x-0.5" : ""} />
             </button>
           </form>
+
+          {/* Debug Logger */}
+          <div className="h-28 bg-[#0a0a0a] border border-slate-800 rounded-lg p-3 overflow-y-auto font-mono text-[11px] leading-relaxed text-emerald-400/90 shadow-inner">
+            <div className="text-slate-500/80 mb-2 border-b border-slate-800 pb-1 flex justify-between">
+              <span>-- UDP Debug Logger --</span>
+              <span>{logs.length} events</span>
+            </div>
+            {logs.map((log, i) => (
+              <div key={i} className="break-all">
+                <span className="text-slate-600 mr-2">[{log.time}]</span> 
+                {log.msg}
+              </div>
+            ))}
+            <div ref={loggerEndRef} />
+          </div>
         </div>
       </div>
     </>

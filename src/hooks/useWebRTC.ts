@@ -77,6 +77,11 @@ export function useWebRTC(userName: string, roomName: string) {
       try {
         addLog(`Platform: ${Capacitor.getPlatform()}`);
         
+        const netStatus = await Network.getStatus();
+        if (netStatus.connectionType === 'none' || netStatus.connectionType === 'cellular') {
+          addLog(`WARNING: Connection type is ${netStatus.connectionType}. UDP may fail without Wi-Fi.`);
+        }
+        
         try {
           await UdpSocket.closeAllSockets();
           addLog("Cleaned up existing sockets.");
@@ -557,5 +562,24 @@ export function useWebRTC(userName: string, roomName: string) {
     readSlice(0);
   }, []);
 
-  return { peers, messages, transfers, sendChatMessage, sendFile, isConnected, logs };
+  const connectToIp = async (ip: string) => {
+    addLog(`Manual connect initiated to IP: ${ip}`);
+    if (!socketIdRef.current) {
+      addLog(`Error: No UDP socket available for manual connect.`);
+      return;
+    }
+    
+    if (!broadcastAddrsRef.current.includes(ip)) {
+      broadcastAddrsRef.current.push(ip);
+      addLog(`Added ${ip} to active broadcast array.`);
+    }
+
+    const manualPeerId = 'manual-' + Math.random().toString(36).substring(2, 9);
+    peersRef.current.set(manualPeerId, { id: manualPeerId, name: ip });
+    updatePeers();
+
+    await createPeerConnection(manualPeerId, true);
+  };
+
+  return { peers, messages, transfers, sendChatMessage, sendFile, isConnected, logs, connectToIp };
 }

@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import com.getcapacitor.JSObject;
+import android.util.Log;
 
 public class MainActivity extends BridgeActivity {
     private WifiManager.MulticastLock multicastLock;
@@ -42,8 +43,9 @@ public class MainActivity extends BridgeActivity {
         server = new SignalingServer();
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
+            Log.d("LanLinkNative", "NanoHTTPD Signaling Server started on port 3003");
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.e("LanLinkNative", "Failed to start NanoHTTPD server", e);
         }
     }
 
@@ -64,6 +66,7 @@ public class MainActivity extends BridgeActivity {
                     data.put("payload", postData);
                     
                     bridge.triggerWindowStageEvent("http-signal", data.toString());
+                    Log.d("LanLinkNative", "Received HTTP signal, triggering JS event");
                     
                     return newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");
                 } catch (Exception e) {

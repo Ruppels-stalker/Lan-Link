@@ -10,11 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@awesome-cordova-plugins/zeroconf": "^9.1.4",
     "@capacitor/android": "^8.3.1",
     "@capacitor/core": "^8.3.1",
     "@capacitor/network": "^8.0.1",
     "@tailwindcss/vite": "^4.2.4",
+    "capacitor-resources": "^2.0.5",
     "capacitor-udp-socket": "^7.0.0",
+    "capacitor-zeroconf": "^4.0.0",
     "framer-motion": "^12.38.0",
     "idb": "^8.0.3",
     "lucide-react": "^1.11.0",

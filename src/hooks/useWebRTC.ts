@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { UdpSocket } from 'capacitor-udp-socket';
+import { ZeroConf } from 'capacitor-zeroconf';
 import { Capacitor } from '@capacitor/core';
 import { Network } from '@capacitor/network';
 import { saveChunk, getFileChunks, clearFileChunks } from '../utils/db';
 
 const CHUNK_SIZE = 64 * 1024; // 64KB
-const UDP_PORT = 3002;
 
 export interface Peer {
   id: string;
@@ -44,9 +43,8 @@ export function useWebRTC(userName: string, roomName: string) {
   }, []);
   
   const myIdRef = useRef<string>(Math.random().toString(36).substring(2, 9));
-  const socketIdRef = useRef<number | null>(null);
-  const broadcastAddrsRef = useRef<string[]>(['255.255.255.255', '192.168.43.255']);
   const [isConnected, setIsConnected] = useState<boolean>(true);
+  const peerIpsRef = useRef<Map<string, string>>(new Map());
   
   const peersRef = useRef<Map<string, Peer>>(new Map());
   const connectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -71,174 +69,110 @@ export function useWebRTC(userName: string, roomName: string) {
       return;
     }
 
-    let heartbeatInterval: any;
-
-    const setupUdp = async () => {
+    const setupDiscovery = async () => {
       try {
         addLog(`Platform: ${Capacitor.getPlatform()}`);
-        
+        addLog(`HTTP Server started on port 3003 (Java)`);
+
         const netStatus = await Network.getStatus();
         if (netStatus.connectionType === 'none' || netStatus.connectionType === 'cellular') {
-          addLog(`WARNING: Connection type is ${netStatus.connectionType}. UDP may fail without Wi-Fi.`);
+          addLog(`WARNING: Connection type is ${netStatus.connectionType}. discovery may fail without Wi-Fi.`);
         }
-        
-        try {
-          await UdpSocket.closeAllSockets();
-          addLog("Cleaned up existing sockets.");
-        } catch (e) {}
 
-        const { socketId } = await UdpSocket.create();
-        socketIdRef.current = socketId;
-        
-        // Dynamically find local subnet broadcast and IP
-        let localIp = '0.0.0.0';
-        try {
-          const info = await UdpSocket.getInfo({ socketId });
-          addLog(`Local IP Detection: ${info.localAddress || 'Unknown'}`);
-          if (info.localAddress && info.localAddress !== '0.0.0.0' && info.localAddress !== '127.0.0.1') {
-            localIp = info.localAddress;
-            const parts = info.localAddress.split('.');
-            if (parts.length === 4) {
-              const dynamicBcast = `${parts[0]}.${parts[1]}.${parts[2]}.255`;
-              broadcastAddrsRef.current = [...new Set([dynamicBcast, '255.255.255.255', '192.168.43.255', '192.168.49.255', '192.168.4.255'])];
-              addLog(`Smart Broadcast Address: ${dynamicBcast}`);
-            }
+        // ZeroConf Discovery
+        await ZeroConf.register({
+          type: '_lanlink._tcp.',
+          name: `${userName} (${myIdRef.current})`,
+          domain: 'local.',
+          port: 3003,
+          props: {
+            id: myIdRef.current,
+            name: userName
           }
-        } catch (e: any) {
-           addLog(`Error getting local IP: ${e.message}`);
-        }
-        
-        let currentPort = UDP_PORT;
-        try {
-          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
-        } catch (bindErr) {
-          addLog(`0.0.0.0 bind failed, trying local IP: ${localIp}...`);
-          try {
-            await UdpSocket.bind({ socketId, port: currentPort, address: localIp });
-            addLog(`Successfully bound to ${localIp}`);
-          } catch (bindErr2) {
-             addLog(`Local IP bind failed, trying random port on 0.0.0.0...`);
-             currentPort = Math.floor(Math.random() * (5000 - 4000 + 1)) + 4000;
-             await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
-             addLog(`Successfully bound to fallback port ${currentPort}`);
-          }
-        }
-        
-        await UdpSocket.setBroadcast({ socketId, enabled: true });
-        
-        // Listen for UDP packets
-        UdpSocket.addListener('receive', async (event) => {
-          if (event.socketId !== socketIdRef.current || !event.buffer) return;
-          
-          try {
-            // Buffer is base64 string from capacitor plugin or raw string?
-            // Usually capacitor strings are raw unless specified. Assuming JSON directly.
-            // If the plugin sends base64, we'd need to decode it. Let's assume raw string or we catch and decode.
-            let payloadStr = event.buffer;
-            const decodedStr = decodeURIComponent(escape(atob(payloadStr)));
-            const data = JSON.parse(decodedStr);
+        });
+        addLog("Registered ZeroConf service: _lanlink._tcp.");
 
-            if (data.room !== roomName) return; // Ignore other rooms
-            if (data.from === myIdRef.current) return; // Ignore self
-            
-            const fromId = data.from;
+        await ZeroConf.watch({ 
+          type: '_lanlink._tcp.',
+          domain: 'local.'
+        });
+        addLog("Watching for peers via ZeroConf...");
 
-            if (data.type === 'discover') {
-              if (!peersRef.current.has(fromId)) {
-                addLog(`Packet Received (Discover): Found peer ${data.name} at ${event.remoteAddress || 'Unknown'}`);
-                console.log('Discovered new peer:', data.name);
-                peersRef.current.set(fromId, { id: fromId, name: data.name });
-                updatePeers();
-                
-                // If I am the existing peer (my ID is "older" or just lexicographically smaller to avoid dual-initiation)
-                // Actually, let's have the one who discovers initiate, but only if they haven't connected yet.
-                // To avoid glare, peer with smaller ID initiates.
-                if (myIdRef.current < fromId) {
-                  await createPeerConnection(fromId, true);
-                }
-              }
-            } else if (data.type === 'signal') {
-              // Only process signals meant for me
-              if (data.to !== myIdRef.current) return;
+        ZeroConf.addListener('discover', (result: any) => {
+          const service = result.service;
+          if (!service) return;
+
+          const id = service.props?.id || service.name.match(/\((.*?)\)/)?.[1];
+          const name = service.props?.name || service.name.split(' (')[0];
+          const ip = service.ipv4Addresses?.[0] || service.host;
+
+          if (id && id !== myIdRef.current) {
+            if (!peersRef.current.has(id)) {
+              addLog(`ZeroConf: Found peer ${name} at ${ip}`);
+              peersRef.current.set(id, { id, name });
+              peerIpsRef.current.set(id, ip);
+              updatePeers();
               
-              const signal = data.signal;
-              let pc = connectionsRef.current.get(fromId);
-              if (!pc) {
-                pc = await createPeerConnection(fromId, false);
-              }
-
-              if (signal.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                sendUdpSignal(fromId, answer);
-                
-                // Process queued candidates
-                const queue = iceQueues.current.get(fromId) || [];
-                for (const candidate of queue) {
-                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                }
-                iceQueues.current.delete(fromId);
-              } else if (signal.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
-              } else if (signal.candidate) {
-                if (pc.remoteDescription) {
-                  await pc.addIceCandidate(new RTCIceCandidate(signal));
-                } else {
-                  const queue = iceQueues.current.get(fromId) || [];
-                  queue.push(signal);
-                  iceQueues.current.set(fromId, queue);
-                }
+              if (myIdRef.current < id) {
+                createPeerConnection(id, true);
               }
             }
-          } catch (e) {
-            // Ignore parse errors (might be non-JSON UDP traffic)
           }
         });
 
-        // Start heartbeat
-        const broadcastDiscover = async () => {
-          if (!socketIdRef.current) return;
-          const msg = JSON.stringify({
-            type: 'discover',
-            room: roomName,
-            from: myIdRef.current,
-            name: userName
-          });
-          // capacitor-udp-socket expects string buffer. Send as base64.
-          const b64Msg = btoa(unescape(encodeURIComponent(msg)));
+        // Listen for HTTP signals from Java Server
+        window.addEventListener('http-signal', ((event: any) => {
           try {
-            addLog(`Packet Sent (Discover) to: ${broadcastAddrsRef.current.join(', ')}`);
-            for (const addr of broadcastAddrsRef.current) {
-              UdpSocket.send({
-                socketId: socketIdRef.current,
-                address: addr,
-                port: UDP_PORT,
-                buffer: b64Msg
-              }).catch((e) => { addLog(`UDP Send Error to ${addr}: ${e.message}`); }); 
-            }
-          } catch (e: any) {
-            addLog(`UDP Broadcast Try/Catch Error: ${e.message}`);
-            console.error("Broadcast failed", e);
+            const data = JSON.parse(JSON.parse(event.detail).payload);
+            processSignal(data);
+          } catch (e) {
+            console.error("Failed to parse HTTP signal", e);
           }
-        };
-
-        broadcastDiscover();
-        heartbeatInterval = setInterval(broadcastDiscover, 5000); // 5 seconds per request
+        }) as any);
 
       } catch (err: any) {
-        let errDetails = "Unknown Error";
-        try {
-          errDetails = JSON.stringify(err);
-        } catch (e) {
-          errDetails = String(err);
-        }
-        addLog(`UDP Setup Error: ${err.message || ''} | ${errDetails}`);
-        console.error("Failed to setup UDP", err);
+        addLog(`Discovery Setup Error: ${err.message}`);
       }
     };
 
-    setupUdp();
+    const processSignal = async (data: any) => {
+      if (data.room !== roomName) return;
+      if (data.from === myIdRef.current) return;
+      if (data.to !== myIdRef.current) return;
+
+      const fromId = data.from;
+      const signal = data.signal;
+
+      let pc = connectionsRef.current.get(fromId);
+      if (!pc) {
+        pc = await createPeerConnection(fromId, false);
+      }
+
+      if (signal.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal(fromId, answer);
+        
+        const queue = iceQueues.current.get(fromId) || [];
+        for (const candidate of queue) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+        iceQueues.current.delete(fromId);
+      } else if (signal.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+      } else if (signal.candidate) {
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal));
+        } else {
+          const queue = iceQueues.current.get(fromId) || [];
+          queue.push(signal);
+          iceQueues.current.set(fromId, queue);
+        }
+      }
+    };
+
+    setupDiscovery();
 
     // Check Network status
     Network.getStatus().then(status => setIsConnected(status.connected));
@@ -248,10 +182,7 @@ export function useWebRTC(userName: string, roomName: string) {
 
     return () => {
       netListener.then(l => l.remove());
-      clearInterval(heartbeatInterval);
-      if (socketIdRef.current !== null) {
-        UdpSocket.close({ socketId: socketIdRef.current });
-      }
+      ZeroConf.stop();
       connectionsRef.current.forEach(pc => pc.close());
       connectionsRef.current.clear();
       channelsRef.current.clear();
@@ -263,8 +194,13 @@ export function useWebRTC(userName: string, roomName: string) {
     setPeers(Array.from(peersRef.current.values()));
   };
 
-  const sendUdpSignal = async (toId: string, signalData: any) => {
-    if (!socketIdRef.current) return;
+  const sendSignal = async (toId: string, signalData: any) => {
+    const peerIp = peerIpsRef.current.get(toId);
+    if (!peerIp) {
+      addLog(`Error: Cannot send signal to ${toId}, IP unknown.`);
+      return;
+    }
+
     const msg = JSON.stringify({
       type: 'signal',
       room: roomName,
@@ -272,18 +208,18 @@ export function useWebRTC(userName: string, roomName: string) {
       to: toId,
       signal: signalData
     });
-    const b64Msg = btoa(unescape(encodeURIComponent(msg)));
+
     try {
-      for (const addr of broadcastAddrsRef.current) {
-        UdpSocket.send({
-          socketId: socketIdRef.current,
-          address: addr,
-          port: UDP_PORT,
-          buffer: b64Msg
-        }).catch(() => {});
-      }
-    } catch (e) {
-      console.error("Signal broadcast failed", e);
+      const response = await fetch(`http://${peerIp}:3003/signal`, {
+        method: 'POST',
+        body: `postData=${encodeURIComponent(msg)}`,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (e: any) {
+      addLog(`Signaling Error to ${peerIp}: ${e.message}`);
     }
   };
 
@@ -297,7 +233,7 @@ export function useWebRTC(userName: string, roomName: string) {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendUdpSignal(peerId, event.candidate);
+        sendSignal(peerId, event.candidate);
       }
     };
     
@@ -316,7 +252,7 @@ export function useWebRTC(userName: string, roomName: string) {
       
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      sendUdpSignal(peerId, pc.localDescription);
+      sendSignal(peerId, pc.localDescription);
     } else {
       pc.ondatachannel = (event) => {
         setupDataChannel(peerId, event.channel);
@@ -563,19 +499,11 @@ export function useWebRTC(userName: string, roomName: string) {
   }, []);
 
   const connectToIp = async (ip: string) => {
-    addLog(`Manual connect initiated to IP: ${ip}`);
-    if (!socketIdRef.current) {
-      addLog(`Error: No UDP socket available for manual connect.`);
-      return;
-    }
+    addLog(`Direct HTTP Connect initiated to: ${ip}`);
     
-    if (!broadcastAddrsRef.current.includes(ip)) {
-      broadcastAddrsRef.current.push(ip);
-      addLog(`Added ${ip} to active broadcast array.`);
-    }
-
     const manualPeerId = 'manual-' + Math.random().toString(36).substring(2, 9);
     peersRef.current.set(manualPeerId, { id: manualPeerId, name: ip });
+    peerIpsRef.current.set(manualPeerId, ip);
     updatePeers();
 
     await createPeerConnection(manualPeerId, true);

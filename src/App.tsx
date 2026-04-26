@@ -212,32 +212,33 @@ function Room({ userName, roomName }: { userName: string; roomName: string }) {
           </AnimatePresence>
         </div>
 
-        {/* Manual IP Connect */}
-        <form onSubmit={(e) => { 
-          e.preventDefault(); 
-          if (manualIp.trim()) { 
-            connectToIp(manualIp.trim()); 
-            setManualIp(''); 
-          } 
-        }} className="mt-2 border-t border-slate-800/50 pt-4 flex flex-col gap-2">
+        {/* Plan B: Direct Connect */}
+        <div className="mt-2 border-t border-slate-800/50 pt-4 flex flex-col gap-2">
            <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Plan B: Direct Connect</h4>
            <div className="flex gap-2">
              <input 
                type="text" 
+               id="direct-connect-ip"
                placeholder="192.168.x.x" 
                value={manualIp} 
                onChange={e => setManualIp(e.target.value)} 
-               className="w-full bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500" 
+               className="w-full bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500" 
              />
              <button 
-               type="submit" 
+               type="button"
+               onClick={() => {
+                 if (manualIp.trim()) { 
+                   connectToIp(manualIp.trim()); 
+                   setManualIp(''); 
+                 } 
+               }}
                disabled={!manualIp.trim()} 
                className="bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-lg px-3 text-xs font-medium transition-colors"
              >
                Add
              </button>
            </div>
-        </form>
+        </div>
       </div>
 
       {/* Main Chat/Transfer Area */}

@@ -75,6 +75,8 @@ export function useWebRTC(userName: string, roomName: string) {
 
     const setupUdp = async () => {
       try {
+        addLog(`Platform: ${Capacitor.getPlatform()}`);
+        
         try {
           await UdpSocket.closeAllSockets();
           addLog("Cleaned up existing sockets.");
@@ -83,23 +85,13 @@ export function useWebRTC(userName: string, roomName: string) {
         const { socketId } = await UdpSocket.create();
         socketIdRef.current = socketId;
         
-        let currentPort = UDP_PORT;
-        try {
-          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
-        } catch (bindErr) {
-          addLog(`Port ${currentPort} bind failed, trying random fallback...`);
-          currentPort = Math.floor(Math.random() * (5000 - 4000 + 1)) + 4000;
-          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
-          addLog(`Successfully bound to fallback port ${currentPort}`);
-        }
-        
-        await UdpSocket.setBroadcast({ socketId, enabled: true });
-        
-        // Dynamically find local subnet broadcast
+        // Dynamically find local subnet broadcast and IP
+        let localIp = '0.0.0.0';
         try {
           const info = await UdpSocket.getInfo({ socketId });
           addLog(`Local IP Detection: ${info.localAddress || 'Unknown'}`);
           if (info.localAddress && info.localAddress !== '0.0.0.0' && info.localAddress !== '127.0.0.1') {
+            localIp = info.localAddress;
             const parts = info.localAddress.split('.');
             if (parts.length === 4) {
               const dynamicBcast = `${parts[0]}.${parts[1]}.${parts[2]}.255`;
@@ -109,9 +101,26 @@ export function useWebRTC(userName: string, roomName: string) {
           }
         } catch (e: any) {
            addLog(`Error getting local IP: ${e.message}`);
-           console.error("Could not get socket info", e);
         }
-
+        
+        let currentPort = UDP_PORT;
+        try {
+          await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
+        } catch (bindErr) {
+          addLog(`0.0.0.0 bind failed, trying local IP: ${localIp}...`);
+          try {
+            await UdpSocket.bind({ socketId, port: currentPort, address: localIp });
+            addLog(`Successfully bound to ${localIp}`);
+          } catch (bindErr2) {
+             addLog(`Local IP bind failed, trying random port on 0.0.0.0...`);
+             currentPort = Math.floor(Math.random() * (5000 - 4000 + 1)) + 4000;
+             await UdpSocket.bind({ socketId, port: currentPort, address: '0.0.0.0' });
+             addLog(`Successfully bound to fallback port ${currentPort}`);
+          }
+        }
+        
+        await UdpSocket.setBroadcast({ socketId, enabled: true });
+        
         // Listen for UDP packets
         UdpSocket.addListener('receive', async (event) => {
           if (event.socketId !== socketIdRef.current || !event.buffer) return;
